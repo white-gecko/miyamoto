@@ -6,7 +6,6 @@ from twisted.internet import defer, reactor
 import urllib
 import time
 
-from miyamoto import queue
 #from miyamoto import stream
 
 # TODO: Make these configurable
@@ -14,9 +13,15 @@ RETRIES = 3
 DELAY_MULTIPLIER = 5
 
 subscriptions = dict() # Key: topic, Value: list of subscriber callback URLs
+secrets = dict() # Key: topic, Value: list of subscriber callback URLs
+
+def load_data(new_subscriptions, new_secrets):
+	subscriptions.update(new_subscriptions)
+	secrets.update(new_secrets)
 
 @defer.inlineCallbacks
-def post_and_retry(url, data, retry=0, content_type='application/x-www-form-urlencoded'):
+def post_and_retry(url, data, retry=0,
+                   content_type='application/x-www-form-urlencoded', additional_headers={}):
     if type(data) is dict:
         print "Posting [%s] to %s with %s" % (retry, url, data)
         data = urllib.urlencode(data)
@@ -26,6 +31,7 @@ def post_and_retry(url, data, retry=0, content_type='application/x-www-form-urle
         'Content-Type': content_type,
         'Content-Length': str(len(data)),
     }
+    headers.update(additional_headers)
     try:    
         page = yield client.getPage(url, method='POST' if len(data) else 'GET', headers=headers, postdata=data if len(data) else None)
     except error.Error, e:
@@ -34,24 +40,31 @@ def post_and_retry(url, data, retry=0, content_type='application/x-www-form-urle
         print e
         if retry < RETRIES:
             retry += 1
-            reactor.callLater(retry * DELAY_MULTIPLIER, post_and_retry, url, data, retry, content_type)
+            reactor.callLater(retry * DELAY_MULTIPLIER, post_and_retry, url, data, retry, content_type, additional_headers)
     
 
 @defer.inlineCallbacks
 def publish(url):
     subscribers = subscriptions.get(url, None)
-    if len(subscribers):
+    local_secrets = secrets.get(url, None)
+    if subscribers and len(subscribers):
         print "Fetching %s for %s subscribers" % (url, len(subscribers))
         try:
             page = yield client.getPage(url, headers={'X-Hub-Subscribers': len(subscribers)})
-            for subscriber in subscribers:
-                post_and_retry(subscriber, page, content_type='application/atom+xml')
+            for subscriber, secret in zip(subscribers, local_secrets):
+                import hmac
+                import hashlib
+                ahash = hmac.HMAC(secret, page, hashlib.sha1)
+                post_and_retry(subscriber, page,
+                               content_type='application/atom+xml',
+                               additional_headers={'X-Hub-Signature':"sha1="+ahash.hexdigest()})
         except error.Error, e:
             print e
 
 
 @defer.inlineCallbacks
 def subscribe(to_verify):
+    secret = to_verify.pop('secret')
     print "Verifying %s as a subscriber to %s" % (to_verify['callback'], to_verify['topic'])
     challenge = baseN(abs(hash(time.time())), 36)
     verify_token = to_verify.get('verify_token', None)
@@ -65,9 +78,13 @@ def subscribe(to_verify):
             if to_verify['mode'] == 'subscribe':
                 if not to_verify['topic'] in subscriptions:
                     subscriptions[to_verify['topic']] = []
+                if not to_verify['topic'] in secrets:
+                    secrets[to_verify['topic']] = []
                 subscriptions[to_verify['topic']].append(to_verify['callback'])
+                secrets[to_verify['topic']].append(secret)
             else:
                 subscriptions[to_verify['topic']].remove(to_verify['callback'])
+                secrets[to_verify['topic']].remove(secret)
             defer.returnValue(page)
         else:
             raise Exception("Verification challenge failed")
@@ -86,6 +103,10 @@ class SubscribeResource(Resource):
         mode        = request.args.get('hub.mode', [None])[0]
         callback    = request.args.get('hub.callback', [None])[0]
         topic       = request.args.get('hub.topic', [None])[0]
+        try:
+            secret       = request.args.get('hub.secret', [None])[0]
+        except:
+            secret = ""
         verify      = request.args.get('hub.verify', [None])
         verify_token = request.args.get('hub.verify_token', [None])[0]
         
@@ -102,7 +123,8 @@ class SubscribeResource(Resource):
             request.setResponseCode(http.BAD_REQUEST)
             return "400 Bad request: Unsupported verification mode"
             
-        to_verify = {'mode': mode, 'callback': callback, 'topic': topic, 'verify_token': verify_token}
+        to_verify = {'mode': mode, 'callback': callback, 'topic': topic,
+                     'verify_token': verify_token, 'secret': secret}
         if verify == 'sync':
             def finish_success(request):
                 request.setResponseCode(http.NO_CONTENT)
