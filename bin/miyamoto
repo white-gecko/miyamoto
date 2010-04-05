@@ -1,19 +1,37 @@
 #!/usr/bin/env python
 import sys
+import os
 
 from twisted.internet import reactor
 from twisted.web.server import Site
 from twisted.python import log
 from optparse import OptionParser
+from twisted.internet.interfaces import IReactorSSL
+from twisted.internet.ssl import DefaultOpenSSLContextFactory
+
+
+import pickle
+
 
 sys.path.append('.')
 
 from miyamoto.web import MiyamotoResource
+import miyamoto.pubsub
+
 
 parser = OptionParser()
 parser.add_option('--port', '-p',
                   help="Port number for Miyamoto's HTTP server (default 8080)",
                   default=8080, type='int')
+parser.add_option('--dir', '-d',
+                  help="Home folder for miyamoto data",
+                  default='/tmp/hub', type='str')
+parser.add_option('--cert', '-c',
+                  help="Ssl certificate",
+                  default=None, type='str')
+parser.add_option('--key', '-k',
+                  help="Ssl key",
+                  default=None, type='str')
 parser.add_option('--verbose', '-v', help="Show http activity",
                   action="store_true")
 opts, args = parser.parse_args()
@@ -21,6 +39,43 @@ opts, args = parser.parse_args()
 if opts.verbose:
     log.startLogging(sys.stdout)
 
-reactor.listenTCP(opts.port, Site(MiyamotoResource.setup()))
+# load data
+home_folder = opts.dir
+subscriptions = None
+secrets = None
+secrets_path = os.path.join(home_folder, "secrets.pickle")
+subscriptions_path = os.path.join(home_folder, "subscriptions.pickle")
+if os.path.exists(subscriptions_path):
+    f = open(subscriptions_path, "r")
+    subscriptions = pickle.load(f)
+    f.close()
+    print "loaded",len(subscriptions),"subscriptions"
+if os.path.exists(secrets_path):
+    f = open(secrets_path, "r")
+    secrets = pickle.load(f)
+    f.close()
+
+if subscriptions and secrets:
+    miyamoto.pubsub.load_data(subscriptions, secrets)
+
+# start reactor
+if opts.cert and opts.cert:
+    ctx = DefaultOpenSSLContextFactory(opts.key, opts.cert)
+    reactorssl = IReactorSSL(reactor)
+    # start ssl listener
+    reactorssl.listenSSL(opts.port, Site(MiyamotoResource.setup()), ctx)
+else:
+    reactor.listenTCP(opts.port, Site(MiyamotoResource.setup()))
 reactor.run()
+
+# exiting so save
+if not os.path.exists(home_folder):
+    os.makedirs(home_folder)
+
+f = open(subscriptions_path, "w")
+pickle.dump(miyamoto.pubsub.subscriptions, f)
+f.close()
+f = open(secrets_path, "w")
+pickle.dump(miyamoto.pubsub.secrets, f)
+f.close()
 
