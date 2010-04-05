@@ -1,6 +1,6 @@
 from twisted.web import client, error, http, server
 from twisted.web.resource import Resource
-from miyamoto import queue
+#from miyamoto import queue
 
 # known sessions, session list
 # request gets a queue
@@ -19,7 +19,7 @@ class StreamResource(Resource):
             return "No topic"
         if not topic in listeners:
             listeners[topic] = []
-        request.queue = queue.Queue(lambda m: self._send(request, m))
+            #request.queue = queue.Queue(lambda m: self._send(request, m))
         listeners[topic].append(request)
         request.setHeader('Content-Type', 'application/json')
         request.setHeader('Transfer-Encoding', 'chunked')
