@@ -52,12 +52,8 @@ def publish(url):
         try:
             page = yield client.getPage(url, headers={'X-Hub-Subscribers': len(subscribers)})
             for subscriber, secret in zip(subscribers, local_secrets):
-                import hmac
-                import hashlib
-                ahash = hmac.HMAC(secret, page, hashlib.sha1)
                 post_and_retry(subscriber, page,
-                               content_type='application/atom+xml',
-                               additional_headers={'X-Hub-Signature':"sha1="+ahash.hexdigest()})
+                               content_type='application/atom+xml')
         except error.Error, e:
             print e
 
