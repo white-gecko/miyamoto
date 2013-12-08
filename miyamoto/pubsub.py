@@ -67,7 +67,11 @@ def subscribe(to_verify):
     payload = {'hub.mode': to_verify['mode'], 'hub.topic': to_verify['topic'], 'hub.challenge': challenge}
     if verify_token:
         payload['hub.verify_token'] = verify_token
-    url = '?'.join([to_verify['callback'], urllib.urlencode(payload)])
+    if '?' in to_verify['callback']:
+        delimiter = '&'
+    else:
+        delimiter = '?'
+    url = delimiter.join([to_verify['callback'], urllib.urlencode(payload)])
     try:
         page = yield client.getPage(url)
         if challenge in page:
